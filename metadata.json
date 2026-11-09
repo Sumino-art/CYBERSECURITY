@@ -1,0 +1,6 @@
+{
+  "name": "CYBER SHIELD - ระบบแจ้งเตือนและบันทึกหลักฐานความปลอดภัยไซเบอร์",
+  "description": "ระบบแจ้งเตือนความตระหนักรู้ภัยคุกคามทางไซเบอร์ การละเมิดสิทธิบนโลกออนไลน์ และเครื่องมือรวบรวมหลักฐานดิจิทัลเพื่อการร้องเรียนตามกฎหมาย (Cyber Security Awareness & Digital Evidence Preservation System)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
