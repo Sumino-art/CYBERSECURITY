@@ -130,31 +130,43 @@ class StorageManager {
     isConnected: false,
   };
 
+  private memoryIncidents: IncidentRecord[] = [...INITIAL_SEED_INCIDENTS];
+  private memoryAudit: AuditLogEntry[] = [...INITIAL_AUDIT_LOGS];
+
   constructor() {
     this.init();
   }
 
   private init() {
-    // Check localStorage for user-configured Supabase
     try {
-      const savedConfig = localStorage.getItem(STORAGE_KEY_SUPABASE_CONFIG);
-      if (savedConfig) {
-        this.config = JSON.parse(savedConfig);
-        if (this.config.url && this.config.anonKey) {
-          this.supabase = createClient(this.config.url, this.config.anonKey);
-          this.config.isConnected = true;
+      // Check localStorage for user-configured Supabase
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const savedConfig = localStorage.getItem(STORAGE_KEY_SUPABASE_CONFIG);
+        if (savedConfig) {
+          this.config = JSON.parse(savedConfig);
+          if (this.config.url && this.config.anonKey) {
+            this.supabase = createClient(this.config.url, this.config.anonKey);
+            this.config.isConnected = true;
+          }
+        }
+
+        // Initialize seed data if empty
+        const existingIncidents = localStorage.getItem(STORAGE_KEY_INCIDENTS);
+        if (!existingIncidents) {
+          localStorage.setItem(STORAGE_KEY_INCIDENTS, JSON.stringify(INITIAL_SEED_INCIDENTS));
+        } else {
+          this.memoryIncidents = JSON.parse(existingIncidents);
+        }
+
+        const existingAudit = localStorage.getItem(STORAGE_KEY_AUDIT);
+        if (!existingAudit) {
+          localStorage.setItem(STORAGE_KEY_AUDIT, JSON.stringify(INITIAL_AUDIT_LOGS));
+        } else {
+          this.memoryAudit = JSON.parse(existingAudit);
         }
       }
-    } catch {
-      // Fallback cleanly
-    }
-
-    // Initialize seed data if empty
-    if (!localStorage.getItem(STORAGE_KEY_INCIDENTS)) {
-      localStorage.setItem(STORAGE_KEY_INCIDENTS, JSON.stringify(INITIAL_SEED_INCIDENTS));
-    }
-    if (!localStorage.getItem(STORAGE_KEY_AUDIT)) {
-      localStorage.setItem(STORAGE_KEY_AUDIT, JSON.stringify(INITIAL_AUDIT_LOGS));
+    } catch (e) {
+      console.warn('Storage init fallback to memory storage:', e);
     }
   }
 
@@ -204,11 +216,17 @@ class StorageManager {
     }
 
     try {
-      const raw = localStorage.getItem(STORAGE_KEY_INCIDENTS);
-      return raw ? JSON.parse(raw) : INITIAL_SEED_INCIDENTS;
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const raw = localStorage.getItem(STORAGE_KEY_INCIDENTS);
+        if (raw) {
+          this.memoryIncidents = JSON.parse(raw);
+          return this.memoryIncidents;
+        }
+      }
     } catch {
-      return INITIAL_SEED_INCIDENTS;
+      // Safe fallback
     }
+    return this.memoryIncidents.length > 0 ? this.memoryIncidents : INITIAL_SEED_INCIDENTS;
   }
 
   public async saveIncident(incident: IncidentRecord): Promise<{ success: boolean; error?: string }> {
@@ -224,11 +242,12 @@ class StorageManager {
       }
     }
 
-    // 2. Always persist locally
+    // 2. Persist locally and in memory
     try {
-      const current = await this.getIncidents();
-      const updated = [incident, ...current];
-      localStorage.setItem(STORAGE_KEY_INCIDENTS, JSON.stringify(updated));
+      this.memoryIncidents = [incident, ...this.memoryIncidents];
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.setItem(STORAGE_KEY_INCIDENTS, JSON.stringify(this.memoryIncidents));
+      }
 
       this.addAuditLog(
         'INCIDENT_CREATED',
@@ -239,7 +258,8 @@ class StorageManager {
 
       return { success: true };
     } catch (e: unknown) {
-      return { success: false, error: e instanceof Error ? e.message : 'Storage failed' };
+      // Even if localStorage fails, memory storage succeeded
+      return { success: true };
     }
   }
 
@@ -250,32 +270,38 @@ class StorageManager {
     actorName: string = 'admin'
   ): Promise<boolean> {
     try {
-      const incidents = await this.getIncidents();
-      const index = incidents.findIndex(inc => inc.id === id);
-      if (index === -1) return false;
+      const index = this.memoryIncidents.findIndex(inc => inc.id === id);
+      if (index !== -1) {
+        const inc = this.memoryIncidents[index];
+        inc.status = newStatus;
+        if (notes) inc.statusNotes = notes;
+        this.memoryIncidents[index] = inc;
 
-      const inc = incidents[index];
-      inc.status = newStatus;
-      if (notes) inc.statusNotes = notes;
-      incidents[index] = inc;
+        try {
+          if (typeof window !== 'undefined' && window.localStorage) {
+            localStorage.setItem(STORAGE_KEY_INCIDENTS, JSON.stringify(this.memoryIncidents));
+          }
+        } catch {
+          // Ignore
+        }
 
-      localStorage.setItem(STORAGE_KEY_INCIDENTS, JSON.stringify(incidents));
+        if (this.supabase && this.config.isConnected) {
+          await this.supabase
+            .from('cyber_incidents')
+            .update({ status: newStatus, statusNotes: notes })
+            .eq('id', id);
+        }
 
-      if (this.supabase && this.config.isConnected) {
-        await this.supabase
-          .from('cyber_incidents')
-          .update({ status: newStatus, statusNotes: notes })
-          .eq('id', id);
+        this.addAuditLog(
+          'STATUS_UPDATE',
+          actorName,
+          `ปรับสถานะเคส ${inc.caseNumber} เป็น ${newStatus.toUpperCase()}${notes ? ` (บันทึก: ${notes})` : ''}`,
+          inc.caseNumber
+        );
+
+        return true;
       }
-
-      this.addAuditLog(
-        'STATUS_UPDATE',
-        actorName,
-        `ปรับสถานะเคส ${inc.caseNumber} เป็น ${newStatus.toUpperCase()}${notes ? ` (บันทึก: ${notes})` : ''}`,
-        inc.caseNumber
-      );
-
-      return true;
+      return false;
     } catch {
       return false;
     }
@@ -283,10 +309,16 @@ class StorageManager {
 
   public async deleteIncident(id: string, actorName: string = 'admin'): Promise<boolean> {
     try {
-      const incidents = await this.getIncidents();
-      const target = incidents.find(i => i.id === id);
-      const filtered = incidents.filter(i => i.id !== id);
-      localStorage.setItem(STORAGE_KEY_INCIDENTS, JSON.stringify(filtered));
+      const target = this.memoryIncidents.find(i => i.id === id);
+      this.memoryIncidents = this.memoryIncidents.filter(i => i.id !== id);
+
+      try {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          localStorage.setItem(STORAGE_KEY_INCIDENTS, JSON.stringify(this.memoryIncidents));
+        }
+      } catch {
+        // Ignore
+      }
 
       if (this.supabase && this.config.isConnected) {
         await this.supabase.from('cyber_incidents').delete().eq('id', id);
@@ -304,17 +336,21 @@ class StorageManager {
   // Audit Logs
   public async getAuditLogs(): Promise<AuditLogEntry[]> {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY_AUDIT);
-      return raw ? JSON.parse(raw) : INITIAL_AUDIT_LOGS;
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const raw = localStorage.getItem(STORAGE_KEY_AUDIT);
+        if (raw) {
+          this.memoryAudit = JSON.parse(raw);
+          return this.memoryAudit;
+        }
+      }
     } catch {
-      return INITIAL_AUDIT_LOGS;
+      // Fallback
     }
+    return this.memoryAudit.length > 0 ? this.memoryAudit : INITIAL_AUDIT_LOGS;
   }
 
   public addAuditLog(action: string, actor: string, details: string, caseNumber?: string) {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY_AUDIT);
-      const logs: AuditLogEntry[] = raw ? JSON.parse(raw) : INITIAL_AUDIT_LOGS;
       const newEntry: AuditLogEntry = {
         id: `aud-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
         timestamp: new Date().toISOString(),
@@ -323,10 +359,13 @@ class StorageManager {
         details,
         caseNumber,
       };
-      logs.unshift(newEntry);
-      // Keep last 100 logs
-      const trimmed = logs.slice(0, 100);
-      localStorage.setItem(STORAGE_KEY_AUDIT, JSON.stringify(trimmed));
+      this.memoryAudit.unshift(newEntry);
+      const trimmed = this.memoryAudit.slice(0, 100);
+      this.memoryAudit = trimmed;
+
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.setItem(STORAGE_KEY_AUDIT, JSON.stringify(trimmed));
+      }
     } catch {
       // Safe ignore
     }

@@ -53,17 +53,23 @@ export function detectClientEnvironment(): ClientConnectionInfo {
   const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
   const accessTimeTh = `${now.getDate()} ${thaiMonths[now.getMonth()]} พ.ศ. ${thaiYear} เวลา ${timeStr} น.`;
 
+  const screenWidth = typeof window !== 'undefined' && window.screen ? window.screen.width : 1920;
+  const screenHeight = typeof window !== 'undefined' && window.screen ? window.screen.height : 1080;
+  const pixelRatio = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+  const protocol = typeof window !== 'undefined' && window.location ? window.location.protocol : 'https:';
+  const hostname = typeof window !== 'undefined' && window.location ? window.location.hostname : 'localhost';
+
   return {
     accessTimeTh,
     timestampIso: now.toISOString(),
     browser,
     os,
     deviceType,
-    screenResolution: `${window.screen.width} × ${window.screen.height} (${window.devicePixelRatio}x)`,
-    connectionProtocol: window.location.protocol === 'https:' ? 'HTTPS (TLS 1.3)' : 'HTTP Standard',
-    connectionSecure: window.location.protocol === 'https:' || window.location.hostname === 'localhost',
-    language: navigator.language || 'th-TH',
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Bangkok',
+    screenResolution: `${screenWidth} × ${screenHeight} (${pixelRatio}x)`,
+    connectionProtocol: protocol === 'https:' ? 'HTTPS (TLS 1.3)' : 'HTTP Standard',
+    connectionSecure: protocol === 'https:' || hostname === 'localhost',
+    language: typeof navigator !== 'undefined' ? navigator.language || 'th-TH' : 'th-TH',
+    timezone: (typeof Intl !== 'undefined' && Intl.DateTimeFormat) ? (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Bangkok') : 'Asia/Bangkok',
     ipPlaceholder: 'เซสชันเครือข่ายต้นทาง (Session ISP Gateway)',
     estimatedPing: Math.floor(18 + Math.random() * 24),
   };
